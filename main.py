@@ -34,13 +34,6 @@ def keep_alive():
 
 LOGGER = logging.getLogger("nethric_bot")
 
-def int_env(name: str, default: int, *, minimum: int = 0) -> int:
-    raw = os.getenv(name)
-    if not raw:
-        return default
-    val = int(raw)
-    return max(val, minimum)
-
 @dataclass(frozen=True)
 class BotSettings:
     token: str
@@ -56,7 +49,7 @@ class BotSettings:
         guild_id = int(raw_guild) if raw_guild else None
         return cls(
             token=token,
-            database_path=Path(os.getenv("DATABASE_PATH", "data/bot.sqlite3")),
+            database_path=Path(os.getenv("DATABASE_PATH", "/app/data/credits.sqlite3")),
             guild_id=guild_id,
         )
 
@@ -82,7 +75,6 @@ class BotStore:
 
     def _initialize(self) -> None:
         with self._connect() as conn:
-            # Welcomer & Goodbye
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS welcome_settings (
                     guild_id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL, message_text TEXT NOT NULL
@@ -93,7 +85,6 @@ class BotStore:
                     guild_id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL, message_text TEXT NOT NULL
                 )
             """)
-            # Reaction Roles
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS reaction_role_configs (
                     config_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,7 +100,6 @@ class BotStore:
                     PRIMARY KEY (config_id, emoji)
                 )
             """)
-            # Tickets
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS ticket_panels (
                     panel_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,11 +109,6 @@ class BotStore:
                     staff_role_id INTEGER, log_open_id INTEGER NOT NULL, log_closed_id INTEGER NOT NULL, created_by INTEGER NOT NULL
                 )
             """)
-            try:
-                conn.execute("ALTER TABLE ticket_panels ADD COLUMN staff_role_id INTEGER")
-            except sqlite3.OperationalError:
-                pass
-
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS active_tickets (
                     channel_id INTEGER PRIMARY KEY, guild_id INTEGER NOT NULL,
@@ -132,12 +117,7 @@ class BotStore:
                     staff_role_id INTEGER, log_open_id INTEGER NOT NULL, log_closed_id INTEGER NOT NULL, claimed_by TEXT DEFAULT 'None'
                 )
             """)
-            try:
-                conn.execute("ALTER TABLE active_tickets ADD COLUMN staff_role_id INTEGER")
-            except sqlite3.OperationalError:
-                pass
 
-    # Welcome / Goodbye Methods
     def set_welcome(self, guild_id: int, channel_id: int, message_text: str) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -160,7 +140,6 @@ class BotStore:
         with self._connect() as conn:
             return conn.execute("SELECT * FROM goodbye_settings WHERE guild_id = ?", (guild_id,)).fetchone()
 
-    # Reaction Role Methods
     def create_rr_draft(self, *, guild_id: int, channel_id: int, name: str, roles: list[ReactionRoleItem], content: str, image_url: Optional[str], created_by: int) -> int:
         with self._connect() as conn:
             cursor = conn.execute(
@@ -190,7 +169,6 @@ class BotStore:
             row = conn.execute("SELECT role_id FROM reaction_role_items WHERE config_id = ? AND emoji = ?", (cfg["config_id"], emoji)).fetchone()
             return row["role_id"] if row else None
 
-    # Ticket Methods
     def create_panel(self, guild_id: int, channel_id: int, title: str, description: str, choices: str, placeholder: str, staff_role_id: Optional[int], log_open_id: int, log_closed_id: int, created_by: int) -> int:
         with self._connect() as conn:
             cursor = conn.execute(
@@ -206,7 +184,7 @@ class BotStore:
     def add_active_ticket(self, channel_id: int, guild_id: int, user_id: int, ticket_name: str, ticket_type: str, opened_at: str, staff_role_id: Optional[int], log_open_id: int, log_closed_id: int) -> None:
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO active_tickets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'None')",
+                "INSERT INTO active_tickets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'None')",
                 (channel_id, guild_id, user_id, ticket_name, ticket_type, opened_at, staff_role_id, log_open_id, log_closed_id)
             )
 
@@ -235,7 +213,7 @@ class BotStore:
 class TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
     reason = discord.ui.TextInput(
         label="Reason",
-        placeholder="The reason for closing the ticket.",
+        placeholder="Alasan menutup tiket...",
         style=discord.TextStyle.paragraph,
         required=True,
         max_length=500
@@ -266,7 +244,7 @@ class TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
             embed.add_field(name="Close Date", value=close_date, inline=True)
             embed.add_field(name="Ticket Close Reason", value=str(self.reason), inline=False)
             await log_ch.send(embed=embed)
-        
+
         bot.store.remove_active_ticket(interaction.channel.id)
 
         try:
@@ -277,7 +255,7 @@ class TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
 class TicketRenameModal(discord.ui.Modal, title="Rename Ticket"):
     new_name = discord.ui.TextInput(
         label="New Ticket Name",
-        placeholder="Masukkan nama baru untuk channel tiket...",
+        placeholder="Masukkan nama baru channel...",
         style=discord.TextStyle.short,
         required=True,
         max_length=50
@@ -301,9 +279,9 @@ class TicketRenameModal(discord.ui.Modal, title="Rename Ticket"):
         try:
             await interaction.channel.edit(name=cleaned_name)
             bot.store.update_ticket_name(interaction.channel.id, cleaned_name)
-            await interaction.response.send_message(f"✅ Tiket berhasil direname menjadi **{cleaned_name}**", ephemeral=False)
+            await interaction.response.send_message(f"✅ Tiket direname menjadi **{cleaned_name}**", ephemeral=False)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Gagal merename channel: {e}", ephemeral=True)
+            await interaction.response.send_message(f"❌ Gagal rename: {e}", ephemeral=True)
 
 class TicketControlView(discord.ui.View):
     def __init__(self) -> None:
@@ -341,11 +319,11 @@ class TicketDropdown(discord.ui.Select):
         guild = interaction.guild
         member = interaction.user
 
-        # Pengecekan Anti-Spam (Double Ticket Check)
+        # Anti-Spam Check
         existing_ticket = bot.store.get_active_ticket_by_user(guild.id, member.id)
         if existing_ticket:
             await interaction.response.send_message(
-                "❌ Ticket kamu yang sebelumnya masih dalam antrian, coba tunggu respon admin untuk close ticket.",
+                "❌ Ticket kamu yang sebelumnya masih aktif!",
                 ephemeral=True
             )
             return
@@ -374,13 +352,13 @@ class TicketDropdown(discord.ui.Select):
         random_id = abs(hash(str(member.id) + str(datetime.now()))) % 9000 + 1000
         ticket_name = f"ticket-{random_id}"
 
-        await interaction.response.defer(ephemeral=True)
-
         try:
-            category = interaction.channel.category if isinstance(interaction.channel, discord.TextChannel) else None
+            # Ambil kategori dari channel panel
+            parent_category = interaction.channel.category if hasattr(interaction.channel, "category") else None
+
             channel = await guild.create_text_channel(
                 name=ticket_name,
-                category=category,
+                category=parent_category,
                 overwrites=overwrites,
                 topic=f"Opened {created_at} by @{member.name}"
             )
@@ -404,11 +382,15 @@ class TicketDropdown(discord.ui.Select):
                 description=f"{member.mention} has created a new **{type_value}** ticket.\n📌 {bot.user.name} | Click close button below",
                 color=discord.Color.gold()
             )
+            
+            # Kirim embed & tombol kontrol langsung saat channel dibuat
             await channel.send(content=member.mention, embed=msg_embed, view=TicketControlView())
-            await interaction.followup.send(f"✅ Tiket kamu berhasil dibuat di {channel.mention}!", ephemeral=True)
+            await interaction.response.send_message(f"✅ Tiket kamu berhasil dibuat di {channel.mention}!", ephemeral=True)
+
         except Exception as e:
             LOGGER.error(f"Error creating ticket: {e}")
-            await interaction.followup.send("Gagal membuat tiket. Pastikan bot memiliki izin Manage Channels.", ephemeral=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"Gagal membuat tiket: {e}", ephemeral=True)
 
 class TicketPanelView(discord.ui.View):
     def __init__(self, choices: list[str], placeholder: str) -> None:
@@ -426,7 +408,7 @@ async def handle_persistent_interactions(interaction: discord.Interaction):
     if not ticket:
         return
 
-    # Validasi Hak Akses (Administrator atau Role Staff Khusus)
+    # Restriksi Admin / Staff
     is_admin = interaction.user.guild_permissions.administrator
     staff_role_id = ticket["staff_role_id"]
     has_staff_role = staff_role_id and any(r.id == staff_role_id for r in interaction.user.roles)
@@ -446,7 +428,7 @@ async def handle_persistent_interactions(interaction: discord.Interaction):
 
     elif custom_id == "ticket:claim":
         if ticket["claimed_by"] != "None":
-            await interaction.response.send_message("Tiket ini sudah diklaim sebelumnya.", ephemeral=True)
+            await interaction.response.send_message("Tiket ini sudah diklaim.", ephemeral=True)
             return
 
         current_time = datetime.now().strftime("%B %d, %Y %I:%M %p")
@@ -771,7 +753,7 @@ def main() -> None:
 
         bot.store.publish_panel(panel_id, msg.id)
         bot.add_view(view, message_id=msg.id)
-        await interaction.response.send_message("✅ Panel tiket berhasil dibuat dengan tombol staff lengkap!", ephemeral=True)
+        await interaction.response.send_message("✅ Panel tiket berhasil dibuat!", ephemeral=True)
 
     bot.run(settings.token)
 
