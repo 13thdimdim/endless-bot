@@ -283,12 +283,15 @@ class TicketRenameModal(discord.ui.Modal, title="Rename Ticket"):
             await interaction.response.send_message(f"❌ Gagal rename: {e}", ephemeral=True)
 
 class TicketControlView(discord.ui.View):
-    def __init__(self) -> None:
+    def __init__(self, claimed_by: str = "None") -> None:
         super().__init__(timeout=None)
         self.add_item(discord.ui.Button(label="Close Ticket", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="ticket:close"))
-        self.add_item(discord.ui.Button(label="Claim Ticket", style=discord.ButtonStyle.secondary, emoji="📑", custom_id="ticket:claim"))
-        self.add_item(discord.ui.Button(label="Unclaim Ticket", style=discord.ButtonStyle.secondary, emoji="🔓", custom_id="ticket:unclaim"))
         self.add_item(discord.ui.Button(label="Rename Ticket", style=discord.ButtonStyle.primary, emoji="✏️", custom_id="ticket:rename"))
+        
+        if claimed_by == "None":
+            self.add_item(discord.ui.Button(label="Claim Ticket", style=discord.ButtonStyle.secondary, emoji="📑", custom_id="ticket:claim_toggle"))
+        else:
+            self.add_item(discord.ui.Button(label="Unclaim Ticket", style=discord.ButtonStyle.success, emoji="🔓", custom_id="ticket:claim_toggle"))
 
 class TicketDropdown(discord.ui.Select):
     def __init__(self, choices_list: list[str], placeholder_text: str = "PILIH TICKET DISINI") -> None:
@@ -317,10 +320,9 @@ class TicketDropdown(discord.ui.Select):
         guild = interaction.guild
         member = interaction.user
 
-        # Anti-Spam Check
         existing_ticket = bot.store.get_active_ticket_by_user(guild.id, member.id)
         if existing_ticket:
-            await interaction.response.send_message("❌ Ticket kamu yang sebelumnya masih aktif!", ephemeral=True)
+            await interaction.response.send_message("❌ Ticket kamu sebelumnya masih ada dalam antrian, silakan tunggu respon admin terlebih dahulu ya!", ephemeral=True)
             return
 
         with bot.store._connect() as conn:
@@ -348,11 +350,20 @@ class TicketDropdown(discord.ui.Select):
         ticket_name = f"ticket-{random_id}"
 
         try:
+            target_category = interaction.channel.category if isinstance(interaction.channel, discord.TextChannel) else None
+
             channel = await guild.create_text_channel(
                 name=ticket_name,
                 overwrites=overwrites,
+                category=target_category,
                 topic=f"Opened {created_at} by @{member.name}"
             )
+
+            if isinstance(interaction.channel, discord.TextChannel):
+                try:
+                    await channel.edit(position=interaction.channel.position + 1)
+                except Exception:
+                    pass
 
             bot.store.add_active_ticket(
                 channel.id, guild.id, member.id, ticket_name, type_value, 
@@ -373,7 +384,7 @@ class TicketDropdown(discord.ui.Select):
                 description=f"{member.mention} has created a new **{type_value}** ticket.\n📌 {bot.user.name} | Click close button below",
                 color=discord.Color.gold()
             )
-            await channel.send(content=member.mention, embed=msg_embed, view=TicketControlView())
+            await channel.send(content=member.mention, embed=msg_embed, view=TicketControlView(claimed_by="None"))
             await interaction.response.send_message(f"✅ Tiket kamu berhasil dibuat di {channel.mention}!", ephemeral=True)
 
         except Exception as e:
@@ -408,18 +419,21 @@ async def handle_persistent_interactions(interaction: discord.Interaction):
         await interaction.response.send_modal(TicketCloseModal())
     elif custom_id == "ticket:rename":
         await interaction.response.send_modal(TicketRenameModal())
-    elif custom_id == "ticket:claim":
-        if ticket["claimed_by"] != "None":
-            await interaction.response.send_message("Tiket ini sudah diklaim.", ephemeral=True)
-            return
-        bot.store.update_ticket_claim(interaction.channel.id, interaction.user.mention)
-        await interaction.response.send_message(f"✅ Tiket diklaim oleh {interaction.user.mention}", ephemeral=False)
-    elif custom_id == "ticket:unclaim":
+    elif custom_id == "ticket:claim_toggle":
         if ticket["claimed_by"] == "None":
-            await interaction.response.send_message("Tiket ini belum diklaim.", ephemeral=True)
-            return
-        bot.store.update_ticket_claim(interaction.channel.id, "None")
-        await interaction.response.send_message(f"🔓 Status klaim tiket dibatalkan.", ephemeral=False)
+            bot.store.update_ticket_claim(interaction.channel.id, interaction.user.mention)
+            new_view = TicketControlView(claimed_by=interaction.user.mention)
+            await interaction.message.edit(view=new_view)
+            await interaction.response.send_message(f"✅ Tiket diklaim oleh {interaction.user.mention}", ephemeral=False)
+        else:
+            if not is_admin and interaction.user.mention not in ticket["claimed_by"]:
+                await interaction.response.send_message("❌ Hanya staff yang mengklaim tiket ini atau Admin yang dapat membatalkan klaim!", ephemeral=True)
+                return
+
+            bot.store.update_ticket_claim(interaction.channel.id, "None")
+            new_view = TicketControlView(claimed_by="None")
+            await interaction.message.edit(view=new_view)
+            await interaction.response.send_message(f"🔓 Status klaim tiket dibatalkan oleh {interaction.user.mention}.", ephemeral=False)
 
 # ==================== BOT CORE ====================
 
@@ -434,7 +448,7 @@ class MinimalNethricBot(commands.Bot):
         self.store = BotStore(settings.database_path)
 
     async def setup_hook(self) -> None:
-        self.add_view(TicketControlView())
+        self.add_view(TicketControlView(claimed_by="None"))
         self.add_listener(handle_persistent_interactions, "on_interaction")
 
         with self.store._connect() as conn:
@@ -596,6 +610,68 @@ def main() -> None:
             await interaction.response.send_message("✅ Pesan diperbarui!", ephemeral=True)
         except Exception:
             await interaction.response.send_message("Gagal mengedit pesan.", ephemeral=True)
+
+    @bot.tree.command(name="reaction-role-create", description="Buat panel reaction role baru")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(
+        name="Nama konfigurasi RR",
+        channel="Channel tujuan",
+        pairs="Format: emoji:@Role, emoji:@Role (dipisahkan koma)",
+        content="Pesan deskripsi panel RR",
+        image_url="URL gambar banner (opsional)"
+    )
+    async def reaction_role_create(
+        interaction: discord.Interaction,
+        name: str,
+        channel: discord.TextChannel,
+        pairs: str,
+        content: str,
+        image_url: Optional[str] = None
+    ) -> None:
+        items = []
+        raw_pairs = [p.strip() for p in pairs.split(",") if p.strip()]
+        for p in raw_pairs:
+            parts = p.split(":", 1)
+            if len(parts) != 2:
+                continue
+            emoji_str = parts[0].strip()
+            role_mention = parts[1].strip()
+            role_id_match = re.search(r'\d+', role_mention)
+            if not role_id_match:
+                continue
+            r_id = int(role_id_match.group(0))
+            role_obj = interaction.guild.get_role(r_id)
+            if role_obj:
+                items.append(ReactionRoleItem(emoji=emoji_str, role_id=role_obj.id, role_name=role_obj.name))
+
+        if not items:
+            await interaction.response.send_message("❌ Format pasangan emoji dan role tidak valid. Contoh: `⭐:@VIP, 🎮:@Gamer`", ephemeral=True)
+            return
+
+        config_id = bot.store.create_rr_draft(
+            guild_id=interaction.guild.id,
+            channel_id=channel.id,
+            name=name,
+            roles=items,
+            content=content,
+            image_url=image_url,
+            created_by=interaction.user.id
+        )
+
+        embed = discord.Embed(title=name, description=content, color=discord.Color.blue())
+        if image_url:
+            embed.set_image(url=image_url)
+
+        msg = await channel.send(embed=embed)
+        bot.store.publish_rr(config_id, msg.id)
+
+        for item in items:
+            try:
+                await msg.add_reaction(item.emoji)
+            except Exception:
+                pass
+
+        await interaction.response.send_message(f"✅ Panel Reaction Role berhasil dipublikasikan di {channel.mention}!", ephemeral=True)
 
     @bot.tree.command(name="ticket-panel", description="Buat panel tiket bantuan")
     @app_commands.default_permissions(administrator=True)
