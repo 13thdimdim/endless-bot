@@ -6,7 +6,7 @@ import os
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 from threading import Thread
@@ -16,6 +16,9 @@ from discord import app_commands
 from discord.ext import commands
 from flask import Flask
 from waitress import serve
+
+# Zona Waktu Indonesia Barat (WIB / UTC+7)
+WIB = timezone(timedelta(hours=7))
 
 # ==================== KEEP ALIVE SERVER ====================
 app = Flask('')
@@ -233,7 +236,7 @@ class TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
         await interaction.response.send_message("🔒 Menutup tiket...", ephemeral=False)
         await asyncio.sleep(2)
 
-        close_date = datetime.now().strftime("%B %d, %Y %I:%M %p")
+        close_date = datetime.now(WIB).strftime("%B %d, %Y %I:%M %p")
         log_ch = interaction.guild.get_channel(int(ticket["log_closed_id"]))
         if isinstance(log_ch, discord.TextChannel):
             embed = discord.Embed(title="Ticket Closed", color=discord.Color.gold())
@@ -334,7 +337,7 @@ class TicketDropdown(discord.ui.Select):
             return
 
         type_value = self.values[0]
-        created_at = datetime.now().strftime("%B %d, %Y %I:%M %p")
+        created_at = datetime.now(WIB).strftime("%B %d, %Y %I:%M %p")
 
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -348,7 +351,7 @@ class TicketDropdown(discord.ui.Select):
             if staff_role:
                 overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
-        random_id = abs(hash(str(member.id) + str(datetime.now()))) % 9000 + 1000
+        random_id = abs(hash(str(member.id) + str(datetime.now(WIB)))) % 9000 + 1000
         ticket_name = f"ticket-{random_id}"
 
         try:
@@ -381,7 +384,6 @@ class TicketDropdown(discord.ui.Select):
                 embed.add_field(name="Ticket Type", value=type_value, inline=False)
                 await log_ch.send(embed=embed)
 
-            # Teks embed yang diminta (status antrian)
             msg_embed = discord.Embed(
                 title="Ticket Opened",
                 description=f"{member.mention} has created a new **{type_value}** ticket.\n📌 Status ticket dalam antrian harap tunggu admin/staff merespon",
@@ -423,7 +425,6 @@ async def handle_persistent_interactions(interaction: discord.Interaction):
     elif custom_id == "ticket:rename":
         await interaction.response.send_modal(TicketRenameModal())
     elif custom_id == "ticket:claim_toggle":
-        # Proteksi jika sudah diklaim staff lain
         if ticket["claimed_by"] != "None" and interaction.user.mention not in ticket["claimed_by"] and not is_admin:
             await interaction.response.send_message(f"❌ Tiket ini sudah diklaim terlebih dahulu oleh {ticket['claimed_by']}! Kamu tidak bisa mengklaimnya.", ephemeral=True)
             return
