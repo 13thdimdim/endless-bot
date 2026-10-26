@@ -117,6 +117,7 @@ class BotStore:
                     staff_role_id INTEGER, log_open_id INTEGER NOT NULL, log_closed_id INTEGER NOT NULL, claimed_by TEXT DEFAULT 'None'
                 )
             """)
+            conn.commit()
 
     def set_welcome(self, guild_id: int, channel_id: int, message_text: str) -> None:
         with self._connect() as conn:
@@ -229,11 +230,10 @@ class TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
             await interaction.response.send_message("❌ Data tiket tidak ditemukan.", ephemeral=True)
             return
 
-        await interaction.response.send_message("🔒 Closing ticket...", ephemeral=False)
+        await interaction.response.send_message("🔒 Menutup tiket...", ephemeral=False)
         await asyncio.sleep(2)
 
         close_date = datetime.now().strftime("%B %d, %Y %I:%M %p")
-
         log_ch = interaction.guild.get_channel(int(ticket["log_closed_id"]))
         if isinstance(log_ch, discord.TextChannel):
             embed = discord.Embed(title="Ticket Closed", color=discord.Color.gold())
@@ -246,7 +246,6 @@ class TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
             await log_ch.send(embed=embed)
 
         bot.store.remove_active_ticket(interaction.channel.id)
-
         try:
             await interaction.channel.delete()
         except Exception:
@@ -303,7 +302,6 @@ class TicketDropdown(discord.ui.Select):
                 emoji, label = parts[0], parts[1]
             else:
                 emoji, label = "🎟️", clean
-
             options.append(discord.SelectOption(label=label[:100], value=clean[:100], emoji=emoji))
 
         if not options:
@@ -322,10 +320,7 @@ class TicketDropdown(discord.ui.Select):
         # Anti-Spam Check
         existing_ticket = bot.store.get_active_ticket_by_user(guild.id, member.id)
         if existing_ticket:
-            await interaction.response.send_message(
-                "❌ Ticket kamu yang sebelumnya masih aktif!",
-                ephemeral=True
-            )
+            await interaction.response.send_message("❌ Ticket kamu yang sebelumnya masih aktif!", ephemeral=True)
             return
 
         with bot.store._connect() as conn:
@@ -353,12 +348,8 @@ class TicketDropdown(discord.ui.Select):
         ticket_name = f"ticket-{random_id}"
 
         try:
-            # Ambil kategori dari channel panel
-            parent_category = interaction.channel.category if hasattr(interaction.channel, "category") else None
-
             channel = await guild.create_text_channel(
                 name=ticket_name,
-                category=parent_category,
                 overwrites=overwrites,
                 topic=f"Opened {created_at} by @{member.name}"
             )
@@ -382,8 +373,6 @@ class TicketDropdown(discord.ui.Select):
                 description=f"{member.mention} has created a new **{type_value}** ticket.\n📌 {bot.user.name} | Click close button below",
                 color=discord.Color.gold()
             )
-            
-            # Kirim embed & tombol kontrol langsung saat channel dibuat
             await channel.send(content=member.mention, embed=msg_embed, view=TicketControlView())
             await interaction.response.send_message(f"✅ Tiket kamu berhasil dibuat di {channel.mention}!", ephemeral=True)
 
@@ -403,64 +392,34 @@ async def handle_persistent_interactions(interaction: discord.Interaction):
 
     bot: MinimalNethricBot = interaction.client  # type: ignore
     custom_id = interaction.data.get("custom_id")
-
     ticket = bot.store.get_active_ticket(interaction.channel.id)
     if not ticket:
         return
 
-    # Restriksi Admin / Staff
     is_admin = interaction.user.guild_permissions.administrator
     staff_role_id = ticket["staff_role_id"]
     has_staff_role = staff_role_id and any(r.id == staff_role_id for r in interaction.user.roles)
 
     if not is_admin and not has_staff_role:
-        await interaction.response.send_message(
-            "❌ Hanya admin atau staff khusus yang bisa melakukan tindakan ini, harap tunggu.", 
-            ephemeral=True
-        )
+        await interaction.response.send_message("❌ Hanya admin atau staff khusus yang bisa melakukan tindakan ini.", ephemeral=True)
         return
 
     if custom_id == "ticket:close":
         await interaction.response.send_modal(TicketCloseModal())
-
     elif custom_id == "ticket:rename":
         await interaction.response.send_modal(TicketRenameModal())
-
     elif custom_id == "ticket:claim":
         if ticket["claimed_by"] != "None":
             await interaction.response.send_message("Tiket ini sudah diklaim.", ephemeral=True)
             return
-
-        current_time = datetime.now().strftime("%B %d, %Y %I:%M %p")
         bot.store.update_ticket_claim(interaction.channel.id, interaction.user.mention)
-
-        try:
-            old_topic = interaction.channel.topic or ""
-            new_topic = f"{old_topic} • Claimed by @{interaction.user.name} at {current_time}"
-            await interaction.channel.edit(topic=new_topic)
-        except Exception:
-            pass
-
-        embed = discord.Embed(
-            title="Ticket Claimed",
-            description=f"This ticket has been claimed by {interaction.user.mention}.",
-            color=discord.Color.orange()
-        )
-        await interaction.response.send_message(embed=embed)
-
+        await interaction.response.send_message(f"✅ Tiket diklaim oleh {interaction.user.mention}", ephemeral=False)
     elif custom_id == "ticket:unclaim":
         if ticket["claimed_by"] == "None":
             await interaction.response.send_message("Tiket ini belum diklaim.", ephemeral=True)
             return
-
         bot.store.update_ticket_claim(interaction.channel.id, "None")
-
-        embed = discord.Embed(
-            title="Ticket Unclaimed",
-            description=f"This ticket has been unclaimed by {interaction.user.mention}.",
-            color=discord.Color.blue()
-        )
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(f"🔓 Status klaim tiket dibatalkan.", ephemeral=False)
 
 # ==================== BOT CORE ====================
 
@@ -562,81 +521,15 @@ def main() -> None:
 
     @bot.tree.command(name="set-welcome", description="Atur pesan sambutan member baru")
     @app_commands.default_permissions(administrator=True)
-    @app_commands.describe(channel="Channel kirim pesan", message="Pesan sambutan ({user})")
     async def set_welcome(interaction: discord.Interaction, channel: discord.TextChannel, message: str) -> None:
         bot.store.set_welcome(interaction.guild.id, channel.id, message)
         await interaction.response.send_message(f"✅ Pesan sambutan diatur ke {channel.mention}", ephemeral=True)
 
-    @bot.tree.command(name="edit-welcome", description="Edit channel atau pesan sambutan member baru")
-    @app_commands.default_permissions(administrator=True)
-    @app_commands.describe(channel="Ubah channel tujuan (opsional)", message="Ubah teks pesan sambutan (opsional)")
-    async def edit_welcome(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None, message: Optional[str] = None) -> None:
-        current = bot.store.get_welcome(interaction.guild.id)
-        if not current:
-            await interaction.response.send_message("❌ Belum ada konfigurasi welcome. Gunakan /set-welcome terlebih dahulu.", ephemeral=True)
-            return
-
-        ch_id = channel.id if channel else current["channel_id"]
-        msg_text = message if message is not None else current["message_text"]
-
-        bot.store.set_welcome(interaction.guild.id, ch_id, msg_text)
-        await interaction.response.send_message("✅ Konfigurasi pesan sambutan (welcome) berhasil diperbarui!", ephemeral=True)
-
-    @bot.tree.command(name="test-welcome", description="Simulasi pesan welcome")
-    @app_commands.default_permissions(administrator=True)
-    async def test_welcome(interaction: discord.Interaction) -> None:
-        row = bot.store.get_welcome(interaction.guild.id)
-        if not row:
-            await interaction.response.send_message("❌ Belum ada pesan welcome.", ephemeral=True)
-            return
-        ch = interaction.guild.get_channel(int(row["channel_id"]))
-        if not isinstance(ch, discord.TextChannel):
-            await interaction.response.send_message("❌ Channel welcome tidak ditemukan.", ephemeral=True)
-            return
-
-        embed = discord.Embed(description=str(row["message_text"]).replace("{user}", interaction.user.mention), colour=discord.Colour.orange())
-        embed.set_thumbnail(url=interaction.user.display_avatar.url)
-        await ch.send(embed=embed)
-        await interaction.response.send_message(f"✅ Simulasi welcome dikirim ke {ch.mention}!", ephemeral=True)
-
     @bot.tree.command(name="set-goodbye", description="Atur pesan perpisahan member keluar")
     @app_commands.default_permissions(administrator=True)
-    @app_commands.describe(channel="Channel kirim pesan", message="Pesan goodbye ({user})")
     async def set_goodbye(interaction: discord.Interaction, channel: discord.TextChannel, message: str) -> None:
         bot.store.set_goodbye(interaction.guild.id, channel.id, message)
         await interaction.response.send_message(f"✅ Pesan goodbye diatur ke {channel.mention}", ephemeral=True)
-
-    @bot.tree.command(name="edit-goodbye", description="Edit channel atau pesan perpisahan member keluar")
-    @app_commands.default_permissions(administrator=True)
-    @app_commands.describe(channel="Ubah channel tujuan (opsional)", message="Ubah teks pesan perpisahan (opsional)")
-    async def edit_goodbye(interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None, message: Optional[str] = None) -> None:
-        current = bot.store.get_goodbye(interaction.guild.id)
-        if not current:
-            await interaction.response.send_message("❌ Belum ada konfigurasi goodbye. Gunakan /set-goodbye terlebih dahulu.", ephemeral=True)
-            return
-
-        ch_id = channel.id if channel else current["channel_id"]
-        msg_text = message if message is not None else current["message_text"]
-
-        bot.store.set_goodbye(interaction.guild.id, ch_id, msg_text)
-        await interaction.response.send_message("✅ Konfigurasi pesan perpisahan (goodbye) berhasil diperbarui!", ephemeral=True)
-
-    @bot.tree.command(name="test-goodbye", description="Simulasi pesan goodbye")
-    @app_commands.default_permissions(administrator=True)
-    async def test_goodbye(interaction: discord.Interaction) -> None:
-        row = bot.store.get_goodbye(interaction.guild.id)
-        if not row:
-            await interaction.response.send_message("❌ Belum ada pesan goodbye.", ephemeral=True)
-            return
-        ch = interaction.guild.get_channel(int(row["channel_id"]))
-        if not isinstance(ch, discord.TextChannel):
-            await interaction.response.send_message("❌ Channel goodbye tidak ditemukan.", ephemeral=True)
-            return
-
-        embed = discord.Embed(description=str(row["message_text"]).replace("{user}", interaction.user.mention), colour=discord.Colour.red())
-        embed.set_thumbnail(url=interaction.user.display_avatar.url)
-        await ch.send(embed=embed)
-        await interaction.response.send_message(f"✅ Simulasi goodbye dikirim ke {ch.mention}!", ephemeral=True)
 
     @bot.tree.command(name="say", description="Kirim pesan melalui bot ke channel")
     @app_commands.default_permissions(administrator=True)
@@ -655,78 +548,11 @@ def main() -> None:
             await target_channel.send(content=message)
         await interaction.followup.send(f"✅ Pesan dikirim ke {target_channel.mention}", ephemeral=True)
 
-    @app_commands.guild_only()
-    @bot.tree.command(name="say-edit", description="Edit pesan yang dikirim bot melalui /say")
-    @app_commands.default_permissions(administrator=True)
-    @app_commands.describe(message_id="ID pesan", new_text="Isi pesan baru", channel="Channel tempat pesan")
-    async def say_edit(interaction: discord.Interaction, message_id: str, new_text: str, channel: discord.TextChannel) -> None:
-        try:
-            msg_obj = await channel.fetch_message(int(message_id))
-            if msg_obj.author != bot.user:
-                await interaction.response.send_message("Pesan tersebut bukan dari bot ini.", ephemeral=True)
-                return
-            await msg_obj.edit(content=new_text)
-            await interaction.response.send_message("✅ Pesan diperbarui!", ephemeral=True)
-        except Exception:
-            await interaction.response.send_message("Gagal mengedit pesan.", ephemeral=True)
-
-    @bot.tree.command(name="reaction-role-create", description="Buat reaction role klasik")
+    @bot.tree.command(name="ticket-panel", description="Buat panel tiket bantuan")
     @app_commands.default_permissions(administrator=True)
     @app_commands.describe(
-        channel="Channel panel", name="Judul", content="Deskripsi", image_file="Banner (opsional)",
-        emoji1="Emoji 1", role1="Role 1", emoji2="Emoji 2", role2="Role 2", emoji3="Emoji 3", role3="Role 3"
-    )
-    async def reaction_role_create(
-        interaction: discord.Interaction, channel: discord.TextChannel, name: str, content: str,
-        image_file: Optional[discord.Attachment] = None,
-        emoji1: Optional[str] = None, role1: Optional[discord.Role] = None,
-        emoji2: Optional[str] = None, role2: Optional[discord.Role] = None,
-        emoji3: Optional[str] = None, role3: Optional[discord.Role] = None
-    ) -> None:
-        await interaction.response.defer(ephemeral=True)
-        pairs = [(emoji1, role1), (emoji2, role2), (emoji3, role3)]
-        valid_pairs = [(e.strip(), r) for e, r in pairs if e and r]
-
-        if not valid_pairs:
-            await interaction.followup.send("❌ Masukkan setidaknya 1 pasang emoji & role!", ephemeral=True)
-            return
-
-        items = [ReactionRoleItem(emoji=e, role_id=r.id, role_name=r.name) for e, r in valid_pairs]
-        image_url = None
-        file_to_send = None
-        if image_file:
-            file_to_send = await image_file.to_file()
-            image_url = f"attachment://{image_file.filename}"
-
-        cfg_id = bot.store.create_rr_draft(
-            guild_id=interaction.guild.id, channel_id=channel.id, name=name,
-            roles=items, content=content, image_url=image_url, created_by=interaction.user.id
-        )
-
-        embed = discord.Embed(title=name, description=content, colour=discord.Colour.dark_embed())
-        if image_url:
-            embed.set_image(url=image_url)
-
-        msg = await channel.send(embed=embed, file=file_to_send) if file_to_send else await channel.send(embed=embed)
-
-        for item in items:
-            try:
-                custom_match = re.search(r"<a?:([a-zA-Z0-9\_]+):([0-9]+)>", item.emoji)
-                if custom_match:
-                    await msg.add_reaction(discord.PartialEmoji(name=custom_match.group(1), id=int(custom_match.group(2))))
-                else:
-                    await msg.add_reaction(item.emoji)
-            except Exception as ex:
-                LOGGER.error(f"Gagal tambah reaksi: {ex}")
-
-        bot.store.publish_rr(cfg_id, msg.id)
-        await interaction.followup.send(f"✅ Reaction Role dikirim ke {channel.mention}!", ephemeral=True)
-
-    @bot.tree.command(name="ticket-panel", description="Buat panel tiket bantuan dengan pilihan role staff")
-    @app_commands.default_permissions(administrator=True)
-    @app_commands.describe(
-        title="Judul panel", description="Deskripsi", choices="Contoh: 👤 Member, 🎟️ Invitation (pisahkan koma)",
-        placeholder="Placeholder dropdown", staff_role="Role khusus staff yang bisa claim/close/rename (opsional)",
+        title="Judul panel", description="Deskripsi", choices="Contoh: 👤 Member, 🎟️ Support (pisahkan koma)",
+        placeholder="Placeholder dropdown", staff_role="Role khusus staff (opsional)",
         log_open="Channel log buka", log_closed="Channel log tutup"
     )
     async def ticket_panel(
