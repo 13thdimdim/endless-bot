@@ -22,7 +22,7 @@ app = Flask('')
 
 @app.route('/', methods=['GET', 'HEAD'])
 def home():
-    return "NETHRIC Bot is Online and Alive!", 200
+    return "Endless Bot is Online and Alive!", 200
 
 def run_server():
     serve(app, host='0.0.0.0', port=8080)
@@ -32,7 +32,7 @@ def keep_alive():
     t.daemon = True
     t.start()
 
-LOGGER = logging.getLogger("nethric_bot")
+LOGGER = logging.getLogger("endless_bot")
 
 @dataclass(frozen=True)
 class BotSettings:
@@ -224,7 +224,7 @@ class TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
         if not interaction.guild or not isinstance(interaction.channel, discord.TextChannel):
             return
 
-        bot: MinimalNethricBot = interaction.client  # type: ignore
+        bot: EndlessBot = interaction.client  # type: ignore
         ticket = bot.store.get_active_ticket(interaction.channel.id)
         if not ticket:
             await interaction.response.send_message("❌ Data tiket tidak ditemukan.", ephemeral=True)
@@ -264,29 +264,31 @@ class TicketRenameModal(discord.ui.Modal, title="Rename Ticket"):
         if not interaction.guild or not isinstance(interaction.channel, discord.TextChannel):
             return
 
-        bot: MinimalNethricBot = interaction.client  # type: ignore
+        await interaction.response.defer(ephemeral=True)
+
+        bot: EndlessBot = interaction.client  # type: ignore
         ticket = bot.store.get_active_ticket(interaction.channel.id)
         if not ticket:
-            await interaction.response.send_message("❌ Data tiket tidak ditemukan.", ephemeral=True)
+            await interaction.followup.send("❌ Data tiket tidak ditemukan.", ephemeral=True)
             return
 
         cleaned_name = re.sub(r'[^a-zA-Z0-9\-_]', '-', self.new_name.value.lower().strip())
         if not cleaned_name:
-            await interaction.response.send_message("❌ Nama channel tidak valid.", ephemeral=True)
+            await interaction.followup.send("❌ Nama channel tidak valid.", ephemeral=True)
             return
 
         try:
             await interaction.channel.edit(name=cleaned_name)
             bot.store.update_ticket_name(interaction.channel.id, cleaned_name)
-            await interaction.response.send_message(f"✅ Tiket direname menjadi **{cleaned_name}**", ephemeral=False)
+            await interaction.followup.send(f"✅ Tiket direname menjadi **{cleaned_name}**", ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Gagal rename: {e}", ephemeral=True)
+            await interaction.followup.send(f"❌ Gagal rename: {e}", ephemeral=True)
 
 class TicketControlView(discord.ui.View):
     def __init__(self, claimed_by: str = "None") -> None:
         super().__init__(timeout=None)
         self.add_item(discord.ui.Button(label="Close Ticket", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="ticket:close"))
-        self.add_item(discord.ui.Button(label="Rename Ticket", style=discord.ButtonStyle.primary, emoji="✏️", custom_id="ticket:rename"))
+        self.add_item(discord.ui.Button(label="Rename Ticket", style=discord.ButtonStyle.secondary, emoji="✏️", custom_id="ticket:rename"))
         
         if claimed_by == "None":
             self.add_item(discord.ui.Button(label="Claim Ticket", style=discord.ButtonStyle.secondary, emoji="📑", custom_id="ticket:claim_toggle"))
@@ -316,7 +318,7 @@ class TicketDropdown(discord.ui.Select):
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             return
         
-        bot: MinimalNethricBot = interaction.client  # type: ignore
+        bot: EndlessBot = interaction.client  # type: ignore
         guild = interaction.guild
         member = interaction.user
 
@@ -379,9 +381,10 @@ class TicketDropdown(discord.ui.Select):
                 embed.add_field(name="Ticket Type", value=type_value, inline=False)
                 await log_ch.send(embed=embed)
 
+            # Teks embed yang diminta (status antrian)
             msg_embed = discord.Embed(
                 title="Ticket Opened",
-                description=f"{member.mention} has created a new **{type_value}** ticket.\n📌 {bot.user.name} | Click close button below",
+                description=f"{member.mention} has created a new **{type_value}** ticket.\n📌 Status ticket dalam antrian harap tunggu admin/staff merespon",
                 color=discord.Color.gold()
             )
             await channel.send(content=member.mention, embed=msg_embed, view=TicketControlView(claimed_by="None"))
@@ -401,7 +404,7 @@ async def handle_persistent_interactions(interaction: discord.Interaction):
     if not interaction.guild or not isinstance(interaction.channel, discord.TextChannel):
         return
 
-    bot: MinimalNethricBot = interaction.client  # type: ignore
+    bot: EndlessBot = interaction.client  # type: ignore
     custom_id = interaction.data.get("custom_id")
     ticket = bot.store.get_active_ticket(interaction.channel.id)
     if not ticket:
@@ -420,11 +423,25 @@ async def handle_persistent_interactions(interaction: discord.Interaction):
     elif custom_id == "ticket:rename":
         await interaction.response.send_modal(TicketRenameModal())
     elif custom_id == "ticket:claim_toggle":
+        # Proteksi jika sudah diklaim staff lain
+        if ticket["claimed_by"] != "None" and interaction.user.mention not in ticket["claimed_by"] and not is_admin:
+            await interaction.response.send_message(f"❌ Tiket ini sudah diklaim terlebih dahulu oleh {ticket['claimed_by']}! Kamu tidak bisa mengklaimnya.", ephemeral=True)
+            return
+
         if ticket["claimed_by"] == "None":
             bot.store.update_ticket_claim(interaction.channel.id, interaction.user.mention)
             new_view = TicketControlView(claimed_by=interaction.user.mention)
             await interaction.message.edit(view=new_view)
-            await interaction.response.send_message(f"✅ Tiket diklaim oleh {interaction.user.mention}", ephemeral=False)
+            
+            try:
+                old_topic = interaction.channel.topic or ""
+                new_topic = f"{old_topic} • Claimed by @{interaction.user.name}"
+                await interaction.channel.edit(topic=new_topic)
+            except Exception:
+                pass
+
+            embed = discord.Embed(title="Ticket Claimed", description=f"Tiket diklaim oleh {interaction.user.mention}", color=discord.Color.orange())
+            await interaction.response.send_message(embed=embed)
         else:
             if not is_admin and interaction.user.mention not in ticket["claimed_by"]:
                 await interaction.response.send_message("❌ Hanya staff yang mengklaim tiket ini atau Admin yang dapat membatalkan klaim!", ephemeral=True)
@@ -433,11 +450,20 @@ async def handle_persistent_interactions(interaction: discord.Interaction):
             bot.store.update_ticket_claim(interaction.channel.id, "None")
             new_view = TicketControlView(claimed_by="None")
             await interaction.message.edit(view=new_view)
-            await interaction.response.send_message(f"🔓 Status klaim tiket dibatalkan oleh {interaction.user.mention}.", ephemeral=False)
+            
+            try:
+                old_topic = interaction.channel.topic or ""
+                clean_topic = old_topic.split(" • Claimed by")[0]
+                await interaction.channel.edit(topic=clean_topic)
+            except Exception:
+                pass
+
+            embed = discord.Embed(title="Ticket Unclaimed", description=f"Klaim tiket telah dilepas oleh {interaction.user.mention}.", color=discord.Color.blue())
+            await interaction.response.send_message(embed=embed)
 
 # ==================== BOT CORE ====================
 
-class MinimalNethricBot(commands.Bot):
+class EndlessBot(commands.Bot):
     def __init__(self, settings: BotSettings) -> None:
         intents = discord.Intents.default()
         intents.members = True
@@ -529,7 +555,7 @@ def main() -> None:
     keep_alive()
     logging.basicConfig(level=logging.INFO)
     settings = BotSettings.from_environment()
-    bot = MinimalNethricBot(settings)
+    bot = EndlessBot(settings)
 
     # --- COMMANDS ---
 
