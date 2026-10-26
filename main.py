@@ -525,11 +525,45 @@ def main() -> None:
         bot.store.set_welcome(interaction.guild.id, channel.id, message)
         await interaction.response.send_message(f"✅ Pesan sambutan diatur ke {channel.mention}", ephemeral=True)
 
+    @bot.tree.command(name="test-welcome", description="Simulasi pesan welcome")
+    @app_commands.default_permissions(administrator=True)
+    async def test_welcome(interaction: discord.Interaction) -> None:
+        row = bot.store.get_welcome(interaction.guild.id)
+        if not row:
+            await interaction.response.send_message("❌ Belum ada pesan welcome.", ephemeral=True)
+            return
+        ch = interaction.guild.get_channel(int(row["channel_id"]))
+        if not isinstance(ch, discord.TextChannel):
+            await interaction.response.send_message("❌ Channel welcome tidak ditemukan.", ephemeral=True)
+            return
+
+        embed = discord.Embed(description=str(row["message_text"]).replace("{user}", interaction.user.mention), colour=discord.Colour.orange())
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        await ch.send(embed=embed)
+        await interaction.response.send_message(f"✅ Simulasi welcome dikirim ke {ch.mention}!", ephemeral=True)
+
     @bot.tree.command(name="set-goodbye", description="Atur pesan perpisahan member keluar")
     @app_commands.default_permissions(administrator=True)
     async def set_goodbye(interaction: discord.Interaction, channel: discord.TextChannel, message: str) -> None:
         bot.store.set_goodbye(interaction.guild.id, channel.id, message)
         await interaction.response.send_message(f"✅ Pesan goodbye diatur ke {channel.mention}", ephemeral=True)
+
+    @bot.tree.command(name="test-goodbye", description="Simulasi pesan goodbye")
+    @app_commands.default_permissions(administrator=True)
+    async def test_goodbye(interaction: discord.Interaction) -> None:
+        row = bot.store.get_goodbye(interaction.guild.id)
+        if not row:
+            await interaction.response.send_message("❌ Belum ada pesan goodbye.", ephemeral=True)
+            return
+        ch = interaction.guild.get_channel(int(row["channel_id"]))
+        if not isinstance(ch, discord.TextChannel):
+            await interaction.response.send_message("❌ Channel goodbye tidak ditemukan.", ephemeral=True)
+            return
+
+        embed = discord.Embed(description=str(row["message_text"]).replace("{user}", interaction.user.mention), colour=discord.Colour.red())
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        await ch.send(embed=embed)
+        await interaction.response.send_message(f"✅ Simulasi goodbye dikirim ke {ch.mention}!", ephemeral=True)
 
     @bot.tree.command(name="say", description="Kirim pesan melalui bot ke channel")
     @app_commands.default_permissions(administrator=True)
@@ -547,6 +581,21 @@ def main() -> None:
         else:
             await target_channel.send(content=message)
         await interaction.followup.send(f"✅ Pesan dikirim ke {target_channel.mention}", ephemeral=True)
+
+    @app_commands.guild_only()
+    @bot.tree.command(name="say-edit", description="Edit pesan yang dikirim bot melalui /say")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(message_id="ID pesan", new_text="Isi pesan baru", channel="Channel tempat pesan")
+    async def say_edit(interaction: discord.Interaction, message_id: str, new_text: str, channel: discord.TextChannel) -> None:
+        try:
+            msg_obj = await channel.fetch_message(int(message_id))
+            if msg_obj.author != bot.user:
+                await interaction.response.send_message("Pesan tersebut bukan dari bot ini.", ephemeral=True)
+                return
+            await msg_obj.edit(content=new_text)
+            await interaction.response.send_message("✅ Pesan diperbarui!", ephemeral=True)
+        except Exception:
+            await interaction.response.send_message("Gagal mengedit pesan.", ephemeral=True)
 
     @bot.tree.command(name="ticket-panel", description="Buat panel tiket bantuan")
     @app_commands.default_permissions(administrator=True)
